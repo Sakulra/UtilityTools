@@ -3,6 +3,7 @@ import scipy.io
 import numpy as np
 import pandas as pd
 
+#采用，分批处理，且最后只生成一个csv文件
 def process_large_data(folder_path, output_csv, batch_size=100):
     # 首次写入时创建文件并写入header
     first_batch = True

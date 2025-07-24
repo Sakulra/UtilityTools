@@ -3,6 +3,7 @@ import scipy.io
 import numpy as np
 import pandas as pd
 
+#未使用，处理完所有的.mat文件，最后生成一个csv文件，但是全部读入内存可能出现问题
 def process_mat_files(folder_path, output_csv):
     # 初始化一个空列表来存储所有处理后的数据
     all_data = []

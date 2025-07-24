@@ -3,6 +3,7 @@ import scipy.io
 import numpy as np
 import pandas as pd
 
+#未使用，可参考，每处理一个.mat文件就生成一个csv文件
 def process_mat_files(input_folder, output_folder, segment_length=100):
     """
     处理.mat文件中的receive_A矩阵，按列切割并保存为CSV
