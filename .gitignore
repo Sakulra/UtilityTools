@@ -8,6 +8,12 @@
 *.obj
 *.dylib
 *.csv
+*.npz
+*.npy
+*.pkl
+*.pth
+*.png
+*.json
 
 # 构建目录
 build/
@@ -16,6 +22,8 @@ obj/
 Debug/
 Release/
 output_csv/
+output/
+processed_data
 
 # IDE相关
 .vscode/

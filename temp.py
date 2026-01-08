@@ -17,3 +17,11 @@ def count_lines(filename):
 # 使用
 line_count = count_lines('F:\shiyan_data\processA/add_labeled_dataA.csv')
 print(f"文件总行数: {line_count}")
+
+    # csv_files = [
+    #     'F:\shiyan_data\processA\cft_processed_data.csv',
+    #     'F:\shiyan_data\processA\qiu_processed_data.csv', 
+    #     'F:\shiyan_data\processA\\tuoyuan_processed_data.csv',
+    #     'F:\shiyan_data\processA\yuanzhu_processed_data.csv',
+    #     'F:\shiyan_data\processA\zft_processed_data.csv'
+    # ]
