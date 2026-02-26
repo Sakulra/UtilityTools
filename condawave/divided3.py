@@ -3,7 +3,7 @@ import scipy.io
 import numpy as np
 import pandas as pd
 
-#采用，分批处理，且最后只生成一个csv文件
+#采用，分批处理，且每个形状生成一个csv文件
 def process_large_data(folder_path, output_csv, batch_size=100):
     # 首次写入时创建文件并写入header
     first_batch = True
@@ -35,4 +35,4 @@ def process_large_data(folder_path, output_csv, batch_size=100):
                 print(f"写入最后批次到 {output_csv}")
 
 # 使用示例
-process_large_data('D:\shiyan_data\cft', 'cft_processed_data.csv', batch_size=1000)
+process_large_data('F:/shiyan_data/zft', 'zft_processed_4000.csv', batch_size=1000)
