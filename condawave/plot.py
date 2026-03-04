@@ -3,15 +3,18 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 
+plt.rcParams['font.family'] = 'Times New Roman'
+plt.rcParams['font.size'] = 18
+
 # 读取CSV文件的前四行
 try:
     # 请将'your_file.csv'替换为你的实际文件名
-    df = pd.read_csv('./shuffled_dataset/test.csv', nrows=4)
+    df = pd.read_csv('E:/shiyan_data/cft_processed_4000.csv', nrows=4)
     print(df.shape)
     
     # 创建2x2的子图画布
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-    fig.suptitle('Divided part of the data', fontsize=16)
+    # fig.suptitle('Divided part of the data', fontsize=16)
     
     # 假设每行数据都是数值型数据点
     for i, (index, row) in enumerate(df.iterrows()):
