@@ -47,7 +47,7 @@ def csv_to_stft_images(csv_path, output_dir, img_size=(224, 224),
     
     # 读取CSV文件
     print("正在读取CSV文件...")
-    df = pd.read_csv(csv_path, header=None)
+    df = pd.read_csv(csv_path)
     print(f"数据集形状: {df.shape}")
     
     # 分离特征和标签

@@ -9,7 +9,7 @@ plt.rcParams['font.size'] = 18
 # 读取CSV文件的前四行
 try:
     # 请将'your_file.csv'替换为你的实际文件名
-    df = pd.read_csv('E:/shiyan_data/cft_processed_4000.csv', nrows=4)
+    df = pd.read_csv('./add_labeled_4000.csv', nrows=4)
     print(df.shape)
     
     # 创建2x2的子图画布
