@@ -14,51 +14,59 @@ import argparse
 import warnings
 warnings.filterwarnings('ignore')
 
-# 1. 首先确保数据已转换
-# python transfer.py --csv_path your_data.csv --output_dir ./dataset
-
-# 2. 运行单个模型测试
-# python train.py --data_dir ./dataset --model_type resnet18 --epochs 50
-# python train.py --data_dir ./dataset --model_type resnet50 --epochs 50
-# python train.py --data_dir ./dataset --model_type improved --epochs 50
-
-# 3. 运行完整对比测试
-# python compare_models.py
-
 class AcousticDataset(Dataset):
-
-    def __init__(self, data_dir):
-
+    """修正后的数据集类，支持transform参数"""
+    def __init__(self, data_dir, transform=None, is_training=True):
+        """
+        Args:
+            data_dir: 数据目录路径
+            transform: 数据变换
+            is_training: 是否为训练集（用于区分）
+        """
+        self.data_dir = data_dir
+        self.transform = transform
+        self.is_training = is_training
         self.files = []
         self.labels = []
 
-        for label in range(1,6):
-
-            class_dir = os.path.join(data_dir,str(label))
-
+        # 遍历每个类别文件夹
+        for label in range(1, 6):
+            class_dir = os.path.join(data_dir, str(label))
             if os.path.exists(class_dir):
-
                 for f in os.listdir(class_dir):
-
                     if f.endswith(".npy"):
-
-                        self.files.append(os.path.join(class_dir,f))
-                        self.labels.append(label-1)
+                        self.files.append(os.path.join(class_dir, f))
+                        self.labels.append(label - 1)
 
     def __len__(self):
         return len(self.files)
 
-    def __getitem__(self,idx):
-
+    def __getitem__(self, idx):
+        # 加载npy文件
         feature = np.load(self.files[idx])
-
-        feature = np.stack([feature]*3,axis=0)
-
-        feature = torch.tensor(feature,dtype=torch.float32)
-
+        
+        # 确保数据是2D的 (H, W)
+        if len(feature.shape) == 3:
+            feature = feature.squeeze()
+        
+        # 转换为3通道图像 (3, H, W)
+        feature = np.stack([feature] * 3, axis=0)
+        feature = torch.tensor(feature, dtype=torch.float32)
+        
+        # 应用transform（注意：这里feature已经是tensor，但transform通常用于PIL图像）
+        # 如果transform不为空，需要先转换回PIL图像
+        if self.transform:
+            # 将tensor转换为PIL图像
+            feature_np = feature.numpy().transpose(1, 2, 0)  # (H, W, 3)
+            feature_np = ((feature_np - feature_np.min()) / (feature_np.max() - feature_np.min() + 1e-8) * 255).astype(np.uint8)
+            feature_pil = Image.fromarray(feature_np)
+            feature = self.transform(feature_pil)
+        else:
+            # 如果没有transform，确保数据范围合适
+            feature = (feature - feature.min()) / (feature.max() - feature.min() + 1e-8)
+        
         label = self.labels[idx]
-
-        return feature,label
+        return feature, label
 
 class AcousticAttentionBlock(nn.Module):
     """注意力机制模块 - 帮助网络关注重要的时频区域"""
@@ -356,7 +364,7 @@ def validate(model, dataloader, criterion, device):
         for inputs, labels in tqdm(dataloader, desc='Validation'):
             inputs, labels = inputs.to(device), labels.to(device)
             
-            if hasattr(model, 'forward') and 'return_features' in model.forward.__code__.co_varnames:
+            if hasattr(model, 'forward') and 'return_features' in str(model.forward.__code__.co_varnames):
                 outputs, features = model(inputs, return_features=True)
                 all_features.append(features.cpu().numpy())
             else:
@@ -376,7 +384,7 @@ def validate(model, dataloader, criterion, device):
             100. * correct / total, 
             all_preds, 
             all_labels,
-            np.concatenate(all_features) if all_features else None)
+            np.concatenate(all_features) if len(all_features) > 0 else None)
 
 def plot_feature_distribution(features, labels, class_names):
     """使用t-SNE可视化特征分布"""
@@ -400,7 +408,7 @@ def get_class_weights(dataset):
     """计算类别权重用于处理不平衡"""
     labels = np.array([label for _, label in dataset])
     class_counts = np.bincount(labels)
-    class_weights = 1. / class_counts
+    class_weights = 1. / (class_counts + 1e-8)  # 避免除零
     class_weights = class_weights / class_weights.sum() * len(class_counts)
     return torch.FloatTensor(class_weights)
 
@@ -455,27 +463,37 @@ def main():
     train_dir = os.path.join(args.data_dir, 'train')
     val_dir = os.path.join(args.data_dir, 'val')
     
+    print(f"训练集路径: {train_dir}")
+    print(f"验证集路径: {val_dir}")
+    
     train_dataset = AcousticDataset(train_dir, transform=train_transform, is_training=True)
     val_dataset = AcousticDataset(val_dir, transform=val_transform, is_training=False)
+    
+    print(f"训练集样本数: {len(train_dataset)}")
+    print(f"验证集样本数: {len(val_dataset)}")
+    
+    if len(train_dataset) == 0:
+        print("错误：训练集为空！请检查数据路径和文件格式。")
+        return
     
     # 处理类别不平衡
     class_weights = get_class_weights(train_dataset)
     print(f"类别权重: {class_weights}")
     
+    # 获取所有标签用于加权采样
+    all_labels = [label for _, label in train_dataset]
+    
     # 创建数据加载器（使用加权采样处理不平衡）
     sampler = WeightedRandomSampler(
-        weights=class_weights[train_dataset.labels],
+        weights=class_weights[all_labels],
         num_samples=len(train_dataset),
         replacement=True
     )
     
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, 
-                            sampler=sampler, num_workers=4, pin_memory=True)
+                            sampler=sampler, num_workers=0, pin_memory=True)  # Windows下num_workers设为0
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, 
-                          shuffle=False, num_workers=4, pin_memory=True)
-    
-    print(f"训练集大小: {len(train_dataset)}")
-    print(f"验证集大小: {len(val_dataset)}")
+                          shuffle=False, num_workers=0, pin_memory=True)
     
     # 创建模型
     if args.model_type == 'improved':
@@ -589,7 +607,7 @@ def main():
     class_names = ['长方体', '球体', '椭圆', '圆柱体', '正方体']
     print("\n分类报告:")
     print(classification_report(final_labels, final_preds, 
-                               target_names=class_names))
+                               target_names=class_names, zero_division=0))
     
     # 混淆矩阵
     plot_confusion_matrix(final_labels, final_preds, class_names)
@@ -643,7 +661,7 @@ def plot_training_history(history):
 def plot_confusion_matrix(y_true, y_pred, class_names):
     """绘制混淆矩阵"""
     cm = confusion_matrix(y_true, y_pred)
-    cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+    cm_normalized = cm.astype('float') / (cm.sum(axis=1)[:, np.newaxis] + 1e-8)
     
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
     
