@@ -5,8 +5,8 @@ from scipy import signal
 import matplotlib
 
 # Set font to Times New Roman and font size to 18
-matplotlib.rcParams['font.family'] = 'Times New Roman'
-matplotlib.rcParams['font.size'] = 18
+matplotlib.rcParams['font.family'] = ['Times New Roman',"SimSun"]
+matplotlib.rcParams['font.size'] = 24
 
 # Read the first row from CSV file
 csv_data = pd.read_csv('E:/shiyan_data/cft_processed_4000.csv', header=None)  # Replace with your CSV filename
@@ -30,25 +30,25 @@ stft_magnitude = np.abs(stft_matrix)
 plt.figure(figsize=(12, 8))
 plt.pcolormesh(times, frequencies, 20 * np.log10(stft_magnitude + 1e-10), 
                shading='gouraud', cmap='viridis')
-plt.colorbar(label='Magnitude [dB]')
-plt.xlabel('Time [s]')
-plt.ylabel('Frequency [Hz]')
+plt.colorbar(label='幅度(dB)')
+plt.xlabel('时间(s)')
+plt.ylabel('频率[Hz]')
 # plt.title('STFT of First Row Data')
 plt.tight_layout()
 plt.savefig('stft_result.png', dpi=300, bbox_inches='tight')
 plt.show()
 
-#plot original signal
-# plt.figure(figsize=(12, 8))
-# plt.plot(time_data, first_row, linewidth=2, color='blue')
-# plt.xlabel('Time', fontsize=18)
-# plt.ylabel('Value', fontsize=18)
-# # plt.title('First Row Data vs Time', fontsize=18)
-# plt.grid(True, alpha=0.3)#在图上添加网格线便于看
-# plt.tick_params(axis='both', which='major', labelsize=18)
+# plot original signal
+plt.figure(figsize=(12, 8))
+plt.plot(time_data, first_row, linewidth=2, color='blue')
+plt.xlabel('时间(s)')
+plt.ylabel('电压(V)')
+# plt.title('First Row Data vs Time', fontsize=18)
+plt.grid(True, alpha=0.3)#在图上添加网格线便于看
+plt.tick_params(axis='both', which='major', labelsize=18)
 
-# plt.tight_layout()
-# plt.show()
+plt.tight_layout()
+plt.show()
 
 
 # Optional: Save STFT results
