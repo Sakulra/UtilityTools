@@ -12,7 +12,16 @@ from sklearn.metrics import classification_report, confusion_matrix
 import seaborn as sns
 import argparse
 import warnings
+import csv
 warnings.filterwarnings('ignore')
+
+# 1. 首先确保数据已转换
+# python transfer.py --csv_path your_data.csv --output_dir ./dataset
+
+# 2. 运行单个模型测试
+# python train.py --data_dir ./dataset --model_type resnet18 --epochs 50
+# python train.py --data_dir ./dataset --model_type resnet50 --epochs 50
+# python train.py --data_dir ./dataset --model_type improved --epochs 50
 
 class AcousticDataset(Dataset):
     """修正后的数据集类，支持transform参数"""
@@ -132,16 +141,19 @@ class TemporalFeatureExtractor(nn.Module):
                             bidirectional=True, batch_first=True)
         
     def forward(self, x):
-        # x shape: (batch, channels, height, width)
         batch, channels, height, width = x.shape
         
-        # 重排为 (batch, width, channels*height) 以处理时间维度
-        x_reshaped = x.permute(0, 3, 1, 2).contiguous()
-        x_reshaped = x_reshaped.view(batch, width, -1)
+        # 沿频率维压缩
+        x = torch.mean(x, dim=2)   # (B, C, W)
         
-        lstm_out, _ = self.lstm(x_reshaped)
-        lstm_out = lstm_out.permute(0, 2, 1).contiguous()
-        lstm_out = lstm_out.view(batch, -1, height, width)
+        # 转换为 LSTM 输入
+        x = x.permute(0, 2, 1)     # (B, W, C)
+        
+        lstm_out, _ = self.lstm(x)  # (B, W, C)
+        
+        # 恢复维度
+        lstm_out = lstm_out.permute(0, 2, 1).unsqueeze(2)
+        lstm_out = lstm_out.expand(-1, -1, height, -1)
         
         return lstm_out
 
@@ -173,7 +185,7 @@ class ImprovedAcousticCNN(nn.Module):
         )
         
         # 注意力模块
-        self.attention1 = AcousticAttentionBlock(128)
+        self.attention1 = AcousticAttentionBlock(256)
         self.attention2 = AcousticAttentionBlock(256)
         
         # 特征融合
@@ -228,54 +240,6 @@ class ImprovedAcousticCNN(nn.Module):
             return output, global_feat
         return output
 
-class LightweightAcousticCNN(nn.Module):
-    """轻量级声波分类CNN（适用于小数据集）"""
-    def __init__(self, num_classes=5):
-        super(LightweightAcousticCNN, self).__init__()
-        
-        self.features = nn.Sequential(
-            # 块1
-            nn.Conv2d(3, 16, 3, padding=1),
-            nn.BatchNorm2d(16),
-            nn.ReLU(),
-            nn.Conv2d(16, 16, 3, padding=1),
-            nn.BatchNorm2d(16),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Dropout2d(0.1),
-            
-            # 块2
-            nn.Conv2d(16, 32, 3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.Conv2d(32, 32, 3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Dropout2d(0.1),
-            
-            # 块3
-            nn.Conv2d(32, 64, 3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, 3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool2d((1, 1))
-        )
-        
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Dropout(0.3),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, num_classes)
-        )
-        
-    def forward(self, x):
-        x = self.features(x)
-        x = self.classifier(x)
-        return x
 
 def mixup_data(x, y, alpha=1.0):
     """Mixup数据增强"""
@@ -316,7 +280,7 @@ class FocalLoss(nn.Module):
         else:
             return focal_loss
 
-def train_epoch(model, dataloader, criterion, optimizer, device, use_mixup=True):
+def train_epoch(model, dataloader, criterion, optimizer, device, use_mixup=False):
     """训练一个epoch（支持Mixup）"""
     model.train()
     running_loss = 0.0
@@ -330,6 +294,9 @@ def train_epoch(model, dataloader, criterion, optimizer, device, use_mixup=True)
             inputs, labels_a, labels_b, lam = mixup_data(inputs, labels)
             outputs = model(inputs)
             loss = mixup_criterion(criterion, outputs, labels_a, labels_b, lam)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
             
             # 对于准确率，使用原始标签
             _, predicted = outputs.max(1)
@@ -347,6 +314,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, use_mixup=True)
             _, predicted = outputs.max(1)
             total += labels.size(0)
             correct += predicted.eq(labels).sum().item()
+        
     
     return running_loss / len(dataloader), 100. * correct / total
 
@@ -429,6 +397,12 @@ def main():
     # 设置设备
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"使用设备: {device}")
+
+    #将训练过程保存在csv文件中
+    log_filename = "training_results.csv"
+    with open(log_filename, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['epoch', 'train_loss', 'train_acc', 'val_loss', 'val_acc', 'lr'])
     
     # 数据预处理（针对声波图像的专门增强）
     train_transform = transforms.Compose([
@@ -499,9 +473,6 @@ def main():
     if args.model_type == 'improved':
         print("使用改进的声波专用CNN模型...")
         model = ImprovedAcousticCNN(num_classes=5)
-    elif args.model_type == 'lightweight':
-        print("使用轻量级CNN模型...")
-        model = LightweightAcousticCNN(num_classes=5)
     elif args.model_type == 'resnet18':
         print("使用ResNet18模型...")
         model = models.resnet18(weights='IMAGENET1K_V1')
@@ -572,6 +543,10 @@ def main():
         print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
         print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
         print(f"Learning Rate: {current_lr:.2e}")
+        ###保存在csv中
+        with open(log_filename, 'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([epoch+1, train_loss, train_acc, val_loss, val_acc, current_lr])
         
         # 保存最佳模型
         if val_acc > best_val_acc:
@@ -582,7 +557,7 @@ def main():
                 'optimizer_state_dict': optimizer.state_dict(),
                 'val_acc': val_acc,
                 'val_loss': val_loss,
-            }, 'best_model.pth')
+            }, 'sfz_best_model.pth')
             print(f"✓ 保存最佳模型，验证准确率: {best_val_acc:.2f}%")
             early_stopping_counter = 0
         else:
@@ -597,7 +572,7 @@ def main():
     plot_training_history(history)
     
     # 加载最佳模型进行最终评估
-    checkpoint = torch.load('best_model.pth')
+    checkpoint = torch.load('sfz_best_model.pth')
     model.load_state_dict(checkpoint['model_state_dict'])
     _, _, final_preds, final_labels, final_features = validate(
         model, val_loader, criterion, device

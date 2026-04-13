@@ -3,21 +3,29 @@ import matplotlib.pyplot as plt
 import matplotlib
 
 # 设置新罗马字体
-plt.rcParams['font.family'] = 'Times New Roman'
+plt.rcParams['font.family'] = ['Times New Roman',"SimSun"]
 plt.rcParams['mathtext.fontset'] = 'stix'  # 数学字体也使用类似新罗马的样式
-matplotlib.rcParams['font.size'] = 16
+matplotlib.rcParams['font.size'] = 18
 
 # Confusion Matrix 数据
+#训练集共608000 行数据
+# cm = np.array([
+#     [112530,  2500,  2720,  2810,   850],
+#     [  7610, 113190,    50,   130,   890],
+#     [  2470,   310, 111600,  5580,   560],
+#     [  2170,   410,  1750, 117440,  1330],
+#     [  2960,  2340,  1330,  4820, 109650]
+# ])
+#测试集152000 行数据
 cm = np.array([
-    [11253,  250,  272,  281,   85],
-    [  761, 11319,    5,   13,   89],
-    [  247,   31, 11160,  558,   56],
-    [  217,   41,  175, 11744,  133],
-    [  296,  234,  133,  482, 10965]
-])
+    [28012, 566, 641, 768, 198],
+    [1851, 28343, 4, 36, 215],
+    [634, 56, 28397 , 1309 , 131],
+    [537,   112,   422, 29039, 374],
+    [722,   528,   313 , 1182 ,27610]])
 
 # 类别名称（可自行修改）
-classes = ['cft', 'qiu', 'ty', 'yz', 'zft']
+classes = ['长方体', '球体', '椭圆体', '圆柱体', '正方体']
 
 # 计算每个类别的总和（按行）
 row_sums = cm.sum(axis=1)
@@ -49,10 +57,10 @@ for i in range(cm.shape[0]):
                  horizontalalignment="center",
                  verticalalignment="center",
                  color=text_color,
-                 fontsize=9)
+                 fontsize=14)
 
-plt.ylabel('True Label')
-plt.xlabel('Predicted Label')
+plt.ylabel('真实标签')
+plt.xlabel('预测标签')
 plt.tight_layout()
 
 # 保存高清图像

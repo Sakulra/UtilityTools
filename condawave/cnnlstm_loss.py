@@ -4,6 +4,7 @@ import numpy as np
 # 设置新罗马字体
 plt.rcParams['font.family'] = 'Times New Roman'
 plt.rcParams['mathtext.fontset'] = 'stix'  # 数学字体也使用类似新罗马的样式
+plt.rcParams['font.size'] = 20
 
 # 训练数据
 epochs = list(range(1, 51))
@@ -19,7 +20,7 @@ val_acc = [48.70, 60.47, 68.52, 73.12, 75.57, 80.26, 80.88, 79.92, 81.89, 83.80,
            90.68, 90.51, 90.94, 90.44, 91.98, 91.24, 91.33, 91.15, 91.39, 91.54,
            90.95, 92.52, 91.12, 92.22, 92.71, 91.44, 92.55, 91.73, 92.03, 92.83]
 
-loss = [1.6199, 1.3294, 1.0770, 0.8223, 0.6147, 0.7172, 0.6231, 0.5917, 0.5164, 0.5397,
+loss = [1.6199, 1.3294, 1.0570, 0.8223, 0.6147, 0.7172, 0.6231, 0.5917, 0.5164, 0.5397,
         0.4936, 0.4621, 0.4518, 0.5613, 0.4140, 0.4022, 0.5001, 0.3587, 0.4602, 0.3561,
         0.1837, 0.2820, 0.2248, 0.2058, 0.1734, 0.3047, 0.2168, 0.3022, 0.2183, 0.3676,
         0.1846, 0.2369, 0.2541, 0.1684, 0.3519, 0.2645, 0.2411, 0.3267, 0.2644, 0.2482,
@@ -31,37 +32,37 @@ fig, ax1 = plt.subplots(figsize=(12, 6))
 # 绘制准确率曲线（使用左y轴）
 color1 = '#1f77b4'  # 蓝色
 color2 = '#ff7f0e'  # 橙色
-ax1.set_xlabel('Epoch', fontsize=14, fontname='Times New Roman')
-ax1.set_ylabel('Accuracy (%)', fontsize=14, fontname='Times New Roman', color=color1)
+ax1.set_xlabel('Epoch',  fontname='Times New Roman')
+ax1.set_ylabel('Accuracy (%)', fontname='Times New Roman', color=color1)
 line1 = ax1.plot(epochs, train_acc, color=color1, linestyle='-', marker='o', 
                  markersize=3, linewidth=1.5, label='Train Accuracy', alpha=0.8)
 line2 = ax1.plot(epochs, val_acc, color=color2, linestyle='-', marker='s', 
                  markersize=3, linewidth=1.5, label='Validation Accuracy', alpha=0.8)
-ax1.tick_params(axis='y', labelcolor=color1, labelsize=12)
+ax1.tick_params(axis='y', labelcolor=color1, labelsize=18)
 ax1.set_ylim([30, 100])
 ax1.grid(True, alpha=0.3, linestyle='--')
 
 # 创建右y轴绘制loss
 ax2 = ax1.twinx()
 color3 = '#2ca02c'  # 绿色
-ax2.set_ylabel('Loss', fontsize=14, fontname='Times New Roman', color=color3)
+ax2.set_ylabel('Loss', fontname='Times New Roman', color=color3)
 line3 = ax2.plot(epochs, loss, color=color3, linestyle='-', marker='^', 
                  markersize=3, linewidth=1.5, label='Loss', alpha=0.8)
-ax2.tick_params(axis='y', labelcolor=color3, labelsize=12)
+ax2.tick_params(axis='y', labelcolor=color3, labelsize=18)
 ax2.set_ylim([0, 2.0])
 
 # 合并图例
 lines = line1 + line2 + line3
 labels = [l.get_label() for l in lines]
-ax1.legend(lines, labels, loc='best', fontsize=12, frameon=True, fancybox=True, shadow=True)
+ax1.legend(lines, labels, loc='center right', frameon=True, fancybox=True, shadow=True)
 
 # 设置标题
-plt.title('Training Progress: Accuracy and Loss over Epochs', fontsize=16, fontname='Times New Roman', pad=20)
+# plt.title('Training Progress: Accuracy and Loss over Epochs', fontsize=16, fontname='Times New Roman', pad=20)
 
 
 # 设置x轴刻度
 ax1.set_xticks(np.arange(0, 51, 5))
-ax1.set_xticklabels(np.arange(0, 51, 5), fontsize=12, fontname='Times New Roman')
+ax1.set_xticklabels(np.arange(0, 51, 5), fontname='Times New Roman')
 
 # 调整布局
 fig.tight_layout()
