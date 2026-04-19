@@ -60,7 +60,8 @@ class AcousticDataset(Dataset):
         
         # 转换为3通道图像 (3, H, W)
         feature = np.stack([feature] * 3, axis=0)
-        feature = torch.tensor(feature, dtype=torch.float32)
+        # feature = torch.tensor(feature, dtype=torch.float32)
+        feature = torch.tensor(feature, dtype=torch.float32).unsqueeze(0)
         
         # 应用transform（注意：这里feature已经是tensor，但transform通常用于PIL图像）
         # 如果transform不为空，需要先转换回PIL图像
@@ -157,88 +158,60 @@ class TemporalFeatureExtractor(nn.Module):
         
         return lstm_out
 
-class ImprovedAcousticCNN(nn.Module):
-    """改进的声波分类CNN"""
-    def __init__(self, num_classes=5, input_channels=3):
-        super(ImprovedAcousticCNN, self).__init__()
-        
-        # 初始特征提取
+class ImprovedAcousticCNN_v2(nn.Module):
+    def __init__(self, num_classes=5):
+        super(ImprovedAcousticCNN_v2, self).__init__()
+
+        # ✅ 输入改为1通道
         self.initial_conv = nn.Sequential(
-            nn.Conv2d(input_channels, 32, kernel_size=7, stride=2, padding=3),
+            nn.Conv2d(1, 32, kernel_size=3, padding=1),
             nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.MaxPool2d(3, stride=2, padding=1)
+            nn.ReLU()
         )
-        
-        # 频率特征提取分支
+
+        # ✅ 保留频率分支（核心）
         self.freq_branch = nn.Sequential(
             FrequencyFeatureExtractor(32, 64),
             nn.MaxPool2d(2),
             FrequencyFeatureExtractor(64, 128),
         )
-        
-        # 时间特征提取分支
-        self.temp_branch = nn.Sequential(
-            TemporalFeatureExtractor(32, 64),
-            nn.MaxPool2d(2),
-            TemporalFeatureExtractor(64, 128),
-        )
-        
-        # 注意力模块
-        self.attention1 = AcousticAttentionBlock(256)
-        self.attention2 = AcousticAttentionBlock(256)
-        
-        # 特征融合
+
+        # ✅ 只保留一个注意力
+        self.attention = AcousticAttentionBlock(128)
+
+        # ✅ 特征压缩（防止过拟合）
         self.fusion = nn.Sequential(
-            nn.Conv2d(256, 256, kernel_size=3, padding=1),
-            nn.BatchNorm2d(256),
+            nn.Conv2d(128, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
             nn.ReLU(),
             nn.AdaptiveAvgPool2d((1, 1))
         )
-        
-        # 分类器
+
+        # ✅ 分类器（更轻量）
         self.classifier = nn.Sequential(
             nn.Flatten(),
-            nn.Dropout(0.5),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(0.4),
             nn.Linear(128, 64),
             nn.ReLU(),
+            nn.Dropout(0.3),
             nn.Linear(64, num_classes)
         )
-        
-        # 辅助分类器（用于多任务学习）
-        self.aux_classifier = nn.Sequential(
-            nn.Conv2d(128, 64, kernel_size=1),
-            nn.AdaptiveAvgPool2d((1, 1)),
-            nn.Flatten(),
-            nn.Linear(64, num_classes)
-        )
-        
+
     def forward(self, x, return_features=False):
-        # 初始特征提取
         x = self.initial_conv(x)
-        
-        # 分支处理
-        freq_feat = self.freq_branch(x)
-        temp_feat = self.temp_branch(x)
-        
-        # 特征融合
-        combined = torch.cat([freq_feat, temp_feat], dim=1)
-        combined = self.attention1(combined)
-        combined = self.attention2(combined)
-        
-        # 全局特征
-        global_feat = self.fusion(combined)
-        
-        # 分类
-        output = self.classifier(global_feat)
-        
+
+        x = self.freq_branch(x)
+
+        x = self.attention(x)
+
+        feat = self.fusion(x)
+
+        out = self.classifier(feat)
+
         if return_features:
-            # 返回特征用于可视化
-            return output, global_feat
-        return output
+            return out, feat
+
+        return out
 
 
 def mixup_data(x, y, alpha=1.0):
@@ -383,11 +356,11 @@ def get_class_weights(dataset):
 def main():
     parser = argparse.ArgumentParser(description='声波图像分类训练（改进版）')
     parser.add_argument('--data_dir', type=str, required=True, help='数据集根目录')
-    parser.add_argument('--batch_size', type=int, default=32, help='批次大小')
+    parser.add_argument('--batch_size', type=int, default=64, help='批次大小')
     parser.add_argument('--epochs', type=int, default=100, help='训练轮数')
     parser.add_argument('--lr', type=float, default=0.001, help='学习率')
     parser.add_argument('--model_type', type=str, default='improved',
-                        choices=['improved', 'lightweight', 'resnet18', 'resnet50'],
+                        choices=['improved','resnet18', 'resnet50'],
                         help='模型类型')
     parser.add_argument('--use_focal_loss', action='store_true', help='使用Focal Loss')
     parser.add_argument('--use_mixup', action='store_true', help='使用Mixup增强')
@@ -406,7 +379,7 @@ def main():
     
     # 数据预处理（针对声波图像的专门增强）
     train_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        # transforms.Resize((224, 224)),
         transforms.RandomHorizontalFlip(p=0.3),  # 时间轴翻转
         transforms.RandomVerticalFlip(p=0.1),    # 频率轴翻转（谨慎使用）
         transforms.RandomRotation(5),             # 小角度旋转
@@ -422,12 +395,12 @@ def main():
             hue=0.05
         ),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], 
-                           std=[0.229, 0.224, 0.225])
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], 
+                           std=[0.5, 0.5, 0.5])
     ])
     
     val_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        # transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], 
                            std=[0.229, 0.224, 0.225])

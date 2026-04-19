@@ -57,7 +57,7 @@ for i in range(cm.shape[0]):
                  horizontalalignment="center",
                  verticalalignment="center",
                  color=text_color,
-                 fontsize=14)
+                 fontsize=18)
 
 plt.ylabel('真实标签')
 plt.xlabel('预测标签')

@@ -65,9 +65,11 @@ def stft_to_feature(signal):
 
     # 8. 调整尺寸：缩放到模型输入要求的 224x224
     # 使用 INTER_CUBIC 插值在放大时获得更平滑的边缘
-    spec_resized = cv2.resize(spec_np, (224, 224), interpolation=cv2.INTER_CUBIC)
+    # spec_resized = cv2.resize(spec_np, (224, 224), interpolation=cv2.INTER_CUBIC)
+    # return spec_resized.astype(np.float32)
 
-    return spec_resized.astype(np.float32)
+    #不强制resize，就返回原图
+    return spec_np.astype(np.float32)
 
 
 # -------------------------
