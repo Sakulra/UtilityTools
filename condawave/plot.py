@@ -1,17 +1,17 @@
-#读取csv前四行数据并画在一起
+# 读取csv前四行数据并画在一起
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 
-plt.rcParams['font.family'] = ['Times New Roman',"SimSun"]
-plt.rcParams['font.size'] = 18
+plt.rcParams['font.family'] = ['Times New Roman', "SimSun"]
+plt.rcParams['font.size'] = 24
 
 time_axis = np.loadtxt('ts4000.txt')
 
 # 读取CSV文件的前四行
 try:
     # 请将'your_file.csv'替换为你的实际文件名
-    df = pd.read_csv('E:/shiyan_data/cft_processed_4000.csv', nrows=4)
+    df = pd.read_csv('F:/shiyan_data/cft_processed_4000.csv', nrows=4)
     print(df.shape)
     
     # 创建2x2的子图画布
@@ -23,17 +23,17 @@ try:
         # 确定子图位置
         ax = axes[i//2, i%2]
         
-        # 绘制离散点图
-        #ax.scatter(range(len(row)), row.values, color='blue', alpha=0.7, s=5)
-        ax.scatter(time_axis, row.values, color='blue', alpha=0.7, s=5)
+        # 改为点线图（线条+圆点标记）
+        ax.plot(time_axis, row.values, color='blue', marker='o', markersize=1, 
+                linewidth=1.5, alpha=0.7)
         
         # 设置标题和标签
         # ax.set_title(f'分割后的部分数据')
         ax.set_xlabel('时间(s)')
-        ax.set_ylabel('电压(V)')
+        ax.set_ylabel('幅值(V)')
         
         # 添加网格以便更好地读取数值
-        #ax.grid(True, alpha=0.3)
+        ax.grid(True, alpha=0.3)
         
         # 如果数据点太多，可以调整x轴显示
         # if len(row) > 20:

@@ -9,7 +9,7 @@ matplotlib.rcParams['font.family'] = ['Times New Roman',"SimSun"]
 matplotlib.rcParams['font.size'] = 24
 
 # Read the first row from CSV file
-csv_data = pd.read_csv('E:/shiyan_data/cft_processed_4000.csv', header=None)  # Replace with your CSV filename
+csv_data = pd.read_csv('D:/shiyan_data/剔除多余数据/cft_processed_4000.csv', header=None)  # Replace with your CSV filename
 first_row = csv_data.iloc[0, :].values  # Get first row data
 
 # Read time axis from data.txt file
@@ -42,10 +42,10 @@ plt.show()
 plt.figure(figsize=(12, 8))
 plt.plot(time_data, first_row, linewidth=2, color='blue')
 plt.xlabel('时间(s)')
-plt.ylabel('电压(V)')
+plt.ylabel('幅值(V)')
 # plt.title('First Row Data vs Time', fontsize=18)
 plt.grid(True, alpha=0.3)#在图上添加网格线便于看
-plt.tick_params(axis='both', which='major', labelsize=18)
+plt.tick_params(axis='both', which='major', labelsize=24)
 
 plt.tight_layout()
 plt.show()
