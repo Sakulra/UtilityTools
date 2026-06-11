@@ -15,6 +15,7 @@
 *.png
 *.json
 *.pdf
+*.h5
 
 # 构建目录
 build/

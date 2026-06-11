@@ -133,20 +133,12 @@ Confusion Matrix:
        0.2645,0.2411,0.3267,0.2644,0.2482,0.20860.1776,
        0.2853,0.3301,0.2971,0.1598,0.2583,0.2414,0.3099,0.4559]
 
-resnet 50
-训练集样本数: 608022
-验证集样本数: 151978
-Train Loss: 1.6097, Train Acc: 20.09%
-Val Loss: 1.6094, Val Acc: 19.92%
-Learning Rate: 9.76e-04
-✓ 保存最佳模型，验证准确率: 19.92%
-Train Loss: 1.6096, Train Acc: 19.98%
-Val Loss: 1.6095, Val Acc: 20.11%
-Learning Rate: 9.05e-04
-✓ 保存最佳模型，验证准确率: 20.11%
-Train Loss: 1.6096, Train Acc: 19.89%
-Val Loss: 1.6095, Val Acc: 19.79%
-Learning Rate: 7.94e-04
-Train Loss: 1.6095, Train Acc: 20.04%
-Val Loss: 1.6095, Val Acc: 19.96%
-Learning Rate: 6.55e-04
+[[29251   283   273   219   424]
+ [  590 29593    31    33   358]
+ [  213    22 29661   277   269]
+ [  276    53   289 29239   499]
+ [  171   135   187   324 29540]]
+
+
+ tfanet:92.86
+ cnn+bilstm:93.03

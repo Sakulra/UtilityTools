@@ -1,635 +1,440 @@
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
-from torchvision import transforms, models
 import os
-from PIL import Image
+import csv
+import h5py
 import numpy as np
 from tqdm import tqdm
-import matplotlib.pyplot as plt
-from sklearn.metrics import classification_report, confusion_matrix
-import seaborn as sns
-import argparse
-import warnings
-import csv
-warnings.filterwarnings('ignore')
+from sklearn.metrics import accuracy_score, confusion_matrix
 
-# 1. 首先确保数据已转换
-# python transfer.py --csv_path your_data.csv --output_dir ./dataset
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
 
-# 2. 运行单个模型测试
-# python train.py --data_dir ./dataset --model_type resnet18 --epochs 50
-# python train.py --data_dir ./dataset --model_type resnet50 --epochs 50
-# python train.py --data_dir ./dataset --model_type improved --epochs 50
+# ===============================
+# 1. HDF5数据集
+# ===============================
 
-class AcousticDataset(Dataset):
-    """修正后的数据集类，支持transform参数"""
-    def __init__(self, data_dir, transform=None, is_training=True):
-        """
-        Args:
-            data_dir: 数据目录路径
-            transform: 数据变换
-            is_training: 是否为训练集（用于区分）
-        """
-        self.data_dir = data_dir
-        self.transform = transform
-        self.is_training = is_training
-        self.files = []
-        self.labels = []
+class H5Dataset(Dataset):
 
-        # 遍历每个类别文件夹
-        for label in range(1, 6):
-            class_dir = os.path.join(data_dir, str(label))
-            if os.path.exists(class_dir):
-                for f in os.listdir(class_dir):
-                    if f.endswith(".npy"):
-                        self.files.append(os.path.join(class_dir, f))
-                        self.labels.append(label - 1)
+    def __init__(self, h5_path):
+
+        self.h5_path = h5_path
+
+        # 这里只读取长度
+        with h5py.File(self.h5_path, 'r') as f:
+            self.length = len(f['y'])
+
+        # 不提前打开
+        self.h5_file = None
 
     def __len__(self):
-        return len(self.files)
+
+        return self.length
 
     def __getitem__(self, idx):
-        # 加载npy文件
-        feature = np.load(self.files[idx])
-        
-        # 确保数据是2D的 (H, W)
-        if len(feature.shape) == 3:
-            feature = feature.squeeze()
-        
-        # 转换为3通道图像 (3, H, W)
-        feature = np.stack([feature] * 3, axis=0)
-        # feature = torch.tensor(feature, dtype=torch.float32)
-        feature = torch.tensor(feature, dtype=torch.float32).unsqueeze(0)
-        
-        # 应用transform（注意：这里feature已经是tensor，但transform通常用于PIL图像）
-        # 如果transform不为空，需要先转换回PIL图像
-        if self.transform:
-            # 将tensor转换为PIL图像
-            feature_np = feature.numpy().transpose(1, 2, 0)  # (H, W, 3)
-            feature_np = ((feature_np - feature_np.min()) / (feature_np.max() - feature_np.min() + 1e-8) * 255).astype(np.uint8)
-            feature_pil = Image.fromarray(feature_np)
-            feature = self.transform(feature_pil)
-        else:
-            # 如果没有transform，确保数据范围合适
-            feature = (feature - feature.min()) / (feature.max() - feature.min() + 1e-8)
-        
-        label = self.labels[idx]
-        return feature, label
 
-class AcousticAttentionBlock(nn.Module):
-    """注意力机制模块 - 帮助网络关注重要的时频区域"""
-    def __init__(self, channels):
-        super(AcousticAttentionBlock, self).__init__()
-        self.channel_attention = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Conv2d(channels, channels // 8, 1),
-            nn.ReLU(),
-            nn.Conv2d(channels // 8, channels, 1),
+        # 每个worker第一次访问时再打开
+        if self.h5_file is None:
+
+            self.h5_file = h5py.File(
+                self.h5_path,
+                'r'
+            )
+
+            self.X = self.h5_file['X']
+            self.y = self.h5_file['y']
+
+        x = self.X[idx]
+        y = self.y[idx]-1
+
+        x = torch.tensor(
+            x,
+            dtype=torch.float32
+        ).unsqueeze(0)
+
+        # 标准化
+        x = (x - x.mean()) / (x.std() + 1e-6)
+
+        y = torch.tensor(
+            y,
+            dtype=torch.long
+        )
+
+        return x, y
+
+
+# ===============================
+# 2. 模型
+# ===============================
+
+class FrequencyBlock(nn.Module):
+
+    def __init__(self, in_ch, out_ch):
+
+        super().__init__()
+
+        c1 = out_ch // 3
+        c2 = out_ch // 3
+        c3 = out_ch - c1 - c2
+
+        self.conv1 = nn.Conv2d(
+            in_ch,
+            c1,
+            (3,1),
+            padding=(1,0)
+        )
+
+        self.conv2 = nn.Conv2d(
+            in_ch,
+            c2,
+            (5,1),
+            padding=(2,0)
+        )
+
+        self.conv3 = nn.Conv2d(
+            in_ch,
+            c3,
+            (7,1),
+            padding=(3,0)
+        )
+
+        self.bn = nn.BatchNorm2d(out_ch)
+
+        self.act = nn.GELU()
+
+    def forward(self, x):
+
+        x = torch.cat([
+            self.conv1(x),
+            self.conv2(x),
+            self.conv3(x)
+        ], dim=1)
+
+        return self.act(self.bn(x))
+
+
+class TFAttention(nn.Module):
+
+    def __init__(self, ch):
+
+        super().__init__()
+
+        self.freq_att = nn.Sequential(
+            nn.AdaptiveAvgPool2d((None,1)),
+            nn.Conv2d(ch, ch, 1),
             nn.Sigmoid()
         )
-        
-        self.spatial_attention = nn.Sequential(
-            nn.Conv2d(2, 1, kernel_size=7, padding=3),
+
+        self.time_att = nn.Sequential(
+            nn.AdaptiveAvgPool2d((1,None)),
+            nn.Conv2d(ch, ch, 1),
             nn.Sigmoid()
         )
-    
-    def forward(self, x):
-        # 通道注意力
-        ca = self.channel_attention(x)
-        x_ca = x * ca
-        
-        # 空间注意力
-        avg_pool = torch.mean(x_ca, dim=1, keepdim=True)
-        max_pool, _ = torch.max(x_ca, dim=1, keepdim=True)
-        spatial_input = torch.cat([avg_pool, max_pool], dim=1)
-        sa = self.spatial_attention(spatial_input)
-        x_out = x_ca * sa
-        
-        return x_out + x  # 残差连接
 
-class FrequencyFeatureExtractor(nn.Module):
-    """专门提取频率特征的模块"""
-    def __init__(self, in_channels, out_channels):
-        super(FrequencyFeatureExtractor, self).__init__()
-        
-        # 不同尺度的卷积核捕捉不同频率特征
-        self.conv1 = nn.Conv2d(in_channels, out_channels//4, (3, 1), padding=(1, 0))
-        self.conv2 = nn.Conv2d(in_channels, out_channels//4, (5, 1), padding=(2, 0))
-        self.conv3 = nn.Conv2d(in_channels, out_channels//4, (7, 1), padding=(3, 0))
-        self.conv4 = nn.Conv2d(in_channels, out_channels//4, (1, 3), padding=(0, 1))
-        
-        self.bn = nn.BatchNorm2d(out_channels)
-        self.relu = nn.ReLU()
-        
     def forward(self, x):
-        x1 = self.conv1(x)
-        x2 = self.conv2(x)
-        x3 = self.conv3(x)
-        x4 = self.conv4(x)
-        
-        x_cat = torch.cat([x1, x2, x3, x4], dim=1)
-        return self.relu(self.bn(x_cat))
 
-class TemporalFeatureExtractor(nn.Module):
-    """专门提取时间特征的模块"""
-    def __init__(self, in_channels, out_channels):
-        super(TemporalFeatureExtractor, self).__init__()
-        
-        # 双向LSTM处理时间序列
-        self.lstm = nn.LSTM(in_channels, out_channels//2, 
-                            bidirectional=True, batch_first=True)
-        
+        return x * self.freq_att(x) * self.time_att(x)
+
+
+class TemporalBlock(nn.Module):
+
+    def __init__(self, in_ch):
+
+        super().__init__()
+
+        self.lstm = nn.LSTM(
+            in_ch,
+            64,
+            batch_first=True,
+            bidirectional=True
+        )
+
     def forward(self, x):
-        batch, channels, height, width = x.shape
-        
-        # 沿频率维压缩
-        x = torch.mean(x, dim=2)   # (B, C, W)
-        
-        # 转换为 LSTM 输入
-        x = x.permute(0, 2, 1)     # (B, W, C)
-        
-        lstm_out, _ = self.lstm(x)  # (B, W, C)
-        
-        # 恢复维度
-        lstm_out = lstm_out.permute(0, 2, 1).unsqueeze(2)
-        lstm_out = lstm_out.expand(-1, -1, height, -1)
-        
-        return lstm_out
 
-class ImprovedAcousticCNN_v2(nn.Module):
+        B,C,F,T = x.shape
+
+        x = torch.mean(x, dim=2)
+
+        x = x.permute(0,2,1)
+
+        x,_ = self.lstm(x)
+
+        return x.mean(dim=1)
+
+
+class TFANet(nn.Module):
+
     def __init__(self, num_classes=5):
-        super(ImprovedAcousticCNN_v2, self).__init__()
 
-        # ✅ 输入改为1通道
-        self.initial_conv = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, padding=1),
+        super().__init__()
+
+        self.stem = nn.Sequential(
+            nn.Conv2d(1,32,3,padding=1),
             nn.BatchNorm2d(32),
-            nn.ReLU()
+            nn.GELU()
         )
 
-        # ✅ 保留频率分支（核心）
-        self.freq_branch = nn.Sequential(
-            FrequencyFeatureExtractor(32, 64),
-            nn.MaxPool2d(2),
-            FrequencyFeatureExtractor(64, 128),
-        )
+        self.block1 = FrequencyBlock(32,64)
 
-        # ✅ 只保留一个注意力
-        self.attention = AcousticAttentionBlock(128)
+        self.pool1 = nn.MaxPool2d(2)
 
-        # ✅ 特征压缩（防止过拟合）
-        self.fusion = nn.Sequential(
-            nn.Conv2d(128, 128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool2d((1, 1))
-        )
+        self.block2 = FrequencyBlock(64,128)
 
-        # ✅ 分类器（更轻量）
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Dropout(0.4),
-            nn.Linear(128, 64),
-            nn.ReLU(),
+        self.pool2 = nn.MaxPool2d(2)
+
+        self.att = TFAttention(128)
+
+        self.temporal = TemporalBlock(128)
+
+        self.fc = nn.Sequential(
+            nn.Linear(128,64),
+            nn.GELU(),
             nn.Dropout(0.3),
-            nn.Linear(64, num_classes)
+            nn.Linear(64,num_classes)
         )
 
-    def forward(self, x, return_features=False):
-        x = self.initial_conv(x)
+    def forward(self,x):
 
-        x = self.freq_branch(x)
+        x = self.stem(x)
 
-        x = self.attention(x)
+        x = self.pool1(self.block1(x))
 
-        feat = self.fusion(x)
+        x = self.pool2(self.block2(x))
 
-        out = self.classifier(feat)
+        x = self.att(x)
 
-        if return_features:
-            return out, feat
+        x = self.temporal(x)
 
-        return out
+        return self.fc(x)
 
 
-def mixup_data(x, y, alpha=1.0):
-    """Mixup数据增强"""
-    if alpha > 0:
-        lam = np.random.beta(alpha, alpha)
-    else:
-        lam = 1
-    
-    batch_size = x.size()[0]
-    index = torch.randperm(batch_size).to(x.device)
-    
-    mixed_x = lam * x + (1 - lam) * x[index, :]
-    y_a, y_b = y, y[index]
-    
-    return mixed_x, y_a, y_b, lam
+# ===============================
+# 3. train
+# ===============================
 
-def mixup_criterion(criterion, pred, y_a, y_b, lam):
-    return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
+def train(model, loader, optimizer, criterion, device):
 
-class FocalLoss(nn.Module):
-    """Focal Loss - 处理类别不平衡"""
-    def __init__(self, alpha=1, gamma=2, reduction='mean'):
-        super(FocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-        self.reduction = reduction
-        self.ce = nn.CrossEntropyLoss(reduction='none')
-    
-    def forward(self, inputs, targets):
-        ce_loss = self.ce(inputs, targets)
-        pt = torch.exp(-ce_loss)
-        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
-        
-        if self.reduction == 'mean':
-            return focal_loss.mean()
-        elif self.reduction == 'sum':
-            return focal_loss.sum()
-        else:
-            return focal_loss
-
-def train_epoch(model, dataloader, criterion, optimizer, device, use_mixup=False):
-    """训练一个epoch（支持Mixup）"""
     model.train()
-    running_loss = 0.0
-    correct = 0
-    total = 0
-    
-    for inputs, labels in tqdm(dataloader, desc='Training'):
-        inputs, labels = inputs.to(device), labels.to(device)
-        
-        if use_mixup and np.random.random() > 0.5:
-            inputs, labels_a, labels_b, lam = mixup_data(inputs, labels)
-            outputs = model(inputs)
-            loss = mixup_criterion(criterion, outputs, labels_a, labels_b, lam)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            
-            # 对于准确率，使用原始标签
-            _, predicted = outputs.max(1)
-            correct += (lam * predicted.eq(labels_a).sum().item() + 
-                       (1 - lam) * predicted.eq(labels_b).sum().item())
-            total += labels.size(0)
-        else:
-            optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-            
-            running_loss += loss.item()
-            _, predicted = outputs.max(1)
-            total += labels.size(0)
-            correct += predicted.eq(labels).sum().item()
-        
-    
-    return running_loss / len(dataloader), 100. * correct / total
 
-def validate(model, dataloader, criterion, device):
-    """验证模型"""
+    total_loss = 0
+
+    preds = []
+    labels_all = []
+
+    for x,y in tqdm(loader):
+
+        x = x.to(device, non_blocking=True)
+        y = y.to(device, non_blocking=True)
+
+        out = model(x)
+
+        loss = criterion(out,y)
+
+        optimizer.zero_grad()
+
+        loss.backward()
+
+        optimizer.step()
+
+        total_loss += loss.item()
+
+        preds.extend(out.argmax(1).cpu().numpy())
+
+        labels_all.extend(y.cpu().numpy())
+
+    acc = accuracy_score(labels_all, preds)
+
+    return total_loss / len(loader), acc
+
+
+# ===============================
+# 4. evaluate
+# ===============================
+
+def evaluate(model, loader, criterion, device):
+
     model.eval()
-    running_loss = 0.0
-    correct = 0
-    total = 0
-    all_preds = []
-    all_labels = []
-    all_features = []
-    
+
+    total_loss = 0
+
+    preds = []
+    labels_all = []
+
     with torch.no_grad():
-        for inputs, labels in tqdm(dataloader, desc='Validation'):
-            inputs, labels = inputs.to(device), labels.to(device)
-            
-            if hasattr(model, 'forward') and 'return_features' in str(model.forward.__code__.co_varnames):
-                outputs, features = model(inputs, return_features=True)
-                all_features.append(features.cpu().numpy())
-            else:
-                outputs = model(inputs)
-            
-            loss = criterion(outputs, labels)
-            
-            running_loss += loss.item()
-            _, predicted = outputs.max(1)
-            total += labels.size(0)
-            correct += predicted.eq(labels).sum().item()
-            
-            all_preds.extend(predicted.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
-    
-    return (running_loss / len(dataloader), 
-            100. * correct / total, 
-            all_preds, 
-            all_labels,
-            np.concatenate(all_features) if len(all_features) > 0 else None)
 
-def plot_feature_distribution(features, labels, class_names):
-    """使用t-SNE可视化特征分布"""
-    from sklearn.manifold import TSNE
-    
-    tsne = TSNE(n_components=2, random_state=42)
-    features_2d = tsne.fit_transform(features)
-    
-    plt.figure(figsize=(10, 8))
-    for i in range(len(class_names)):
-        mask = labels == i
-        plt.scatter(features_2d[mask, 0], features_2d[mask, 1], 
-                   label=class_names[i], alpha=0.7)
-    
-    plt.title('Feature Distribution (t-SNE)')
-    plt.legend()
-    plt.savefig('feature_distribution.png')
-    plt.show()
+        for x,y in loader:
 
-def get_class_weights(dataset):
-    """计算类别权重用于处理不平衡"""
-    labels = np.array([label for _, label in dataset])
-    class_counts = np.bincount(labels)
-    class_weights = 1. / (class_counts + 1e-8)  # 避免除零
-    class_weights = class_weights / class_weights.sum() * len(class_counts)
-    return torch.FloatTensor(class_weights)
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
+
+            out = model(x)
+
+            loss = criterion(out,y)
+
+            total_loss += loss.item()
+
+            preds.extend(out.argmax(1).cpu().numpy())
+
+            labels_all.extend(y.cpu().numpy())
+
+    acc = accuracy_score(labels_all, preds)
+
+    return total_loss / len(loader), acc, preds, labels_all
+
+
+# ===============================
+# 5. main
+# ===============================
 
 def main():
-    parser = argparse.ArgumentParser(description='声波图像分类训练（改进版）')
-    parser.add_argument('--data_dir', type=str, required=True, help='数据集根目录')
-    parser.add_argument('--batch_size', type=int, default=64, help='批次大小')
-    parser.add_argument('--epochs', type=int, default=100, help='训练轮数')
-    parser.add_argument('--lr', type=float, default=0.001, help='学习率')
-    parser.add_argument('--model_type', type=str, default='improved',
-                        choices=['improved','resnet18', 'resnet50'],
-                        help='模型类型')
-    parser.add_argument('--use_focal_loss', action='store_true', help='使用Focal Loss')
-    parser.add_argument('--use_mixup', action='store_true', help='使用Mixup增强')
-    
-    args = parser.parse_args()
-    
-    # 设置设备
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"使用设备: {device}")
 
-    #将训练过程保存在csv文件中
-    log_filename = "training_results.csv"
-    with open(log_filename, 'w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(['epoch', 'train_loss', 'train_acc', 'val_loss', 'val_acc', 'lr'])
-    
-    # 数据预处理（针对声波图像的专门增强）
-    train_transform = transforms.Compose([
-        # transforms.Resize((224, 224)),
-        transforms.RandomHorizontalFlip(p=0.3),  # 时间轴翻转
-        transforms.RandomVerticalFlip(p=0.1),    # 频率轴翻转（谨慎使用）
-        transforms.RandomRotation(5),             # 小角度旋转
-        transforms.RandomAffine(
-            degrees=0,
-            translate=(0.1, 0.05),  # 平移增强
-            scale=(0.9, 1.1)         # 缩放增强
-        ),
-        transforms.ColorJitter(
-            brightness=0.2,
-            contrast=0.2,
-            saturation=0.1,
-            hue=0.05
-        ),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], 
-                           std=[0.5, 0.5, 0.5])
-    ])
-    
-    val_transform = transforms.Compose([
-        # transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], 
-                           std=[0.229, 0.224, 0.225])
-    ])
-    
-    # 加载数据集
-    train_dir = os.path.join(args.data_dir, 'train')
-    val_dir = os.path.join(args.data_dir, 'val')
-    
-    print(f"训练集路径: {train_dir}")
-    print(f"验证集路径: {val_dir}")
-    
-    train_dataset = AcousticDataset(train_dir, transform=train_transform, is_training=True)
-    val_dataset = AcousticDataset(val_dir, transform=val_transform, is_training=False)
-    
-    print(f"训练集样本数: {len(train_dataset)}")
-    print(f"验证集样本数: {len(val_dataset)}")
-    
-    if len(train_dataset) == 0:
-        print("错误：训练集为空！请检查数据路径和文件格式。")
-        return
-    
-    # 处理类别不平衡
-    class_weights = get_class_weights(train_dataset)
-    print(f"类别权重: {class_weights}")
-    
-    # 获取所有标签用于加权采样
-    all_labels = [label for _, label in train_dataset]
-    
-    # 创建数据加载器（使用加权采样处理不平衡）
-    sampler = WeightedRandomSampler(
-        weights=class_weights[all_labels],
-        num_samples=len(train_dataset),
-        replacement=True
-    )
-    
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, 
-                            sampler=sampler, num_workers=0, pin_memory=True)  # Windows下num_workers设为0
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, 
-                          shuffle=False, num_workers=0, pin_memory=True)
-    
-    # 创建模型
-    if args.model_type == 'improved':
-        print("使用改进的声波专用CNN模型...")
-        model = ImprovedAcousticCNN(num_classes=5)
-    elif args.model_type == 'resnet18':
-        print("使用ResNet18模型...")
-        model = models.resnet18(weights='IMAGENET1K_V1')
-        model.fc = nn.Linear(model.fc.in_features, 5)
-    elif args.model_type == 'resnet50':
-        print("使用ResNet50模型...")
-        model = models.resnet50(weights='IMAGENET1K_V1')
-        model.fc = nn.Linear(model.fc.in_features, 5)
-    
-    model = model.to(device)
-    
-    # 损失函数
-    if args.use_focal_loss:
-        print("使用Focal Loss...")
-        criterion = FocalLoss(alpha=class_weights.to(device), gamma=2)
-    else:
-        criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
-    
-    # 优化器
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
-    
-    # 学习率调度
-    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer, T_0=10, T_mult=2, eta_min=1e-6
-    )
-    
-    # 早停机制
-    early_stopping_patience = 15
-    early_stopping_counter = 0
-    best_val_acc = 0.0
-    
-    # 训练历史记录
     history = {
-        'train_loss': [],
-        'train_acc': [],
-        'val_loss': [],
-        'val_acc': [],
-        'lr': []
+        "train_loss": [],
+        "train_acc": [],
+        "val_loss": [],
+        "val_acc": []
     }
-    
-    print("开始训练...")
-    for epoch in range(args.epochs):
-        print(f"\nEpoch {epoch+1}/{args.epochs}")
-        print("-" * 50)
-        
-        # 训练
-        train_loss, train_acc = train_epoch(
-            model, train_loader, criterion, optimizer, device, 
-            use_mixup=args.use_mixup
-        )
-        
-        # 验证
-        val_loss, val_acc, val_preds, val_labels, features = validate(
-            model, val_loader, criterion, device
-        )
-        
-        # 更新学习率
-        scheduler.step()
-        current_lr = optimizer.param_groups[0]['lr']
-        
-        # 记录历史
-        history['train_loss'].append(train_loss)
-        history['train_acc'].append(train_acc)
-        history['val_loss'].append(val_loss)
-        history['val_acc'].append(val_acc)
-        history['lr'].append(current_lr)
-        
-        print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
-        print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
-        print(f"Learning Rate: {current_lr:.2e}")
-        ###保存在csv中
-        with open(log_filename, 'a', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow([epoch+1, train_loss, train_acc, val_loss, val_acc, current_lr])
-        
-        # 保存最佳模型
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'val_acc': val_acc,
-                'val_loss': val_loss,
-            }, 'sfz_best_model.pth')
-            print(f"✓ 保存最佳模型，验证准确率: {best_val_acc:.2f}%")
-            early_stopping_counter = 0
-        else:
-            early_stopping_counter += 1
-            if early_stopping_counter >= early_stopping_patience:
-                print(f"早停: {early_stopping_patience}轮未改善")
-                break
-    
-    print(f"\n训练完成！最佳验证准确率: {best_val_acc:.2f}%")
-    
-    # 绘制训练历史
-    plot_training_history(history)
-    
-    # 加载最佳模型进行最终评估
-    checkpoint = torch.load('sfz_best_model.pth')
-    model.load_state_dict(checkpoint['model_state_dict'])
-    _, _, final_preds, final_labels, final_features = validate(
-        model, val_loader, criterion, device
+
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() else "cpu"
     )
-    
-    # 分类报告
-    class_names = ['长方体', '球体', '椭圆', '圆柱体', '正方体']
-    print("\n分类报告:")
-    print(classification_report(final_labels, final_preds, 
-                               target_names=class_names, zero_division=0))
-    
-    # 混淆矩阵
-    plot_confusion_matrix(final_labels, final_preds, class_names)
-    
-    # 特征可视化（如果模型返回特征）
-    if final_features is not None:
-        plot_feature_distribution(final_features, final_labels, class_names)
 
-def plot_training_history(history):
-    """绘制训练历史"""
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 10))
-    
-    # 损失曲线
-    ax1.plot(history['train_loss'], label='Train Loss', linewidth=2)
-    ax1.plot(history['val_loss'], label='Val Loss', linewidth=2)
-    ax1.set_xlabel('Epoch')
-    ax1.set_ylabel('Loss')
-    ax1.set_title('Training and Validation Loss')
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-    
-    # 准确率曲线
-    ax2.plot(history['train_acc'], label='Train Acc', linewidth=2)
-    ax2.plot(history['val_acc'], label='Val Acc', linewidth=2)
-    ax2.set_xlabel('Epoch')
-    ax2.set_ylabel('Accuracy (%)')
-    ax2.set_title('Training and Validation Accuracy')
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
-    
-    # 学习率曲线
-    ax3.plot(history['lr'], linewidth=2, color='green')
-    ax3.set_xlabel('Epoch')
-    ax3.set_ylabel('Learning Rate')
-    ax3.set_title('Learning Rate Schedule')
-    ax3.grid(True, alpha=0.3)
-    
-    # 过拟合检测
-    train_val_gap = np.array(history['train_acc']) - np.array(history['val_acc'])
-    ax4.plot(train_val_gap, linewidth=2, color='red')
-    ax4.axhline(y=0, color='black', linestyle='--', alpha=0.5)
-    ax4.set_xlabel('Epoch')
-    ax4.set_ylabel('Train-Val Gap (%)')
-    ax4.set_title('Overfitting Detection')
-    ax4.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig('training_history.png', dpi=150)
-    plt.show()
+    print(device)
 
-def plot_confusion_matrix(y_true, y_pred, class_names):
-    """绘制混淆矩阵"""
-    cm = confusion_matrix(y_true, y_pred)
-    cm_normalized = cm.astype('float') / (cm.sum(axis=1)[:, np.newaxis] + 1e-8)
-    
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-    
-    # 绝对数量混淆矩阵
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
-                xticklabels=class_names, yticklabels=class_names, ax=ax1)
-    ax1.set_xlabel('Predicted')
-    ax1.set_ylabel('True')
-    ax1.set_title('Confusion Matrix (Counts)')
-    
-    # 归一化混淆矩阵
-    sns.heatmap(cm_normalized, annot=True, fmt='.2f', cmap='Blues',
-                xticklabels=class_names, yticklabels=class_names, ax=ax2)
-    ax2.set_xlabel('Predicted')
-    ax2.set_ylabel('True')
-    ax2.set_title('Confusion Matrix (Normalized)')
-    
-    plt.tight_layout()
-    plt.savefig('confusion_matrix.png', dpi=150)
-    plt.show()
+    # ==========================
+    # 数据集
+    # ==========================
+
+    train_dataset = H5Dataset(
+        "./dataset/train.h5"
+    )
+
+    val_dataset = H5Dataset(
+        "./dataset/val.h5"
+    )
+
+    # ==========================
+    # DataLoader
+    # ==========================
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=128,
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True,
+        persistent_workers=False,
+        prefetch_factor=4
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=128,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True,
+        persistent_workers=True
+    )
+
+    # ==========================
+    # 模型
+    # ==========================
+
+    model = TFANet().to(device)
+
+    criterion = nn.CrossEntropyLoss()
+
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=4e-3
+    )
+
+    best_acc = 0
+
+    # ==========================
+    # 训练
+    # ==========================
+
+    for epoch in range(50):
+
+        print(f"\nEpoch {epoch+1}")
+
+        train_loss, train_acc = train(
+            model,
+            train_loader,
+            optimizer,
+            criterion,
+            device
+        )
+
+        val_loss, val_acc, preds, labels = evaluate(
+            model,
+            val_loader,
+            criterion,
+            device
+        )
+
+        print(
+            f"Train Loss: {train_loss:.4f} | "
+            f"Train Acc: {train_acc:.4f} | "
+            f"Val Loss: {val_loss:.4f} | "
+            f"Val Acc: {val_acc:.4f}"
+        )
+
+        history["train_loss"].append(train_loss)
+        history["train_acc"].append(train_acc)
+        history["val_loss"].append(val_loss)
+        history["val_acc"].append(val_acc)
+
+        if val_acc > best_acc:
+
+            best_acc = val_acc
+
+            torch.save(
+                model.state_dict(),
+                "acoustic_best_model.pth"
+            )
+
+            print("✅ 保存最佳模型")
+
+    # ==========================
+    # 保存日志
+    # ==========================
+
+    with open(
+        "acoustic_training_log.csv",
+        "w",
+        newline=""
+    ) as f:
+
+        writer = csv.writer(f)
+
+        writer.writerow([
+            "epoch",
+            "train_loss",
+            "train_acc",
+            "val_loss",
+            "val_acc"
+        ])
+
+        for i in range(len(history["train_loss"])):
+
+            writer.writerow([
+                i + 1,
+                history["train_loss"][i],
+                history["train_acc"][i],
+                history["val_loss"][i],
+                history["val_acc"][i]
+            ])
+
+    print("\nBest Acc:", best_acc)
+
+    print("\nConfusion Matrix:")
+
+    print(confusion_matrix(labels, preds))
+
 
 if __name__ == "__main__":
+
+    torch.multiprocessing.set_start_method('spawn', force=True)
+
     main()

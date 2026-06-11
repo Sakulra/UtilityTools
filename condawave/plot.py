@@ -22,9 +22,10 @@ try:
     for i, (index, row) in enumerate(df.iterrows()):
         # 确定子图位置
         ax = axes[i//2, i%2]
+        ax.margins(x=0)
         
         # 改为点线图（线条+圆点标记）
-        ax.plot(time_axis, row.values, color='blue', marker='o', markersize=1, 
+        ax.plot(time_axis-0.025, row.values, color='blue', marker='o', markersize=0.5, 
                 linewidth=1.5, alpha=0.7)
         
         # 设置标题和标签
