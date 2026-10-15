@@ -38,3 +38,14 @@ python main.py
 - `main.py`：程序入口
 - `portrait_editor/gui.py`：Tkinter 界面和操作流程
 - `portrait_editor/image_ops.py`：抠图、背景合成、格式转换与压缩
+
+替换说明
+1. 将 portrait_editor/gui.py 复制到你项目的 portrait_editor/gui.py，覆盖旧文件。
+2. 此 GUI 依赖更新版 image_ops.py 中的名称：
+   SUPPORTED_MODELS、extract_alpha_mask、apply_alpha_mask
+   并要求 remove_background(image, model_name="u2net") 支持 model_name 参数。
+3. 运行：python main.py
+4. 选择模型后点击“自动抠出人像”。抠图完成后可用“擦除背景/恢复人像”画笔编辑。
+5. 画笔大小以原图像素计；预览缩放可放大局部，滚动条用于移动视图。
+6. 恢复画笔恢复到 AI 初始蒙版在该区域的结果；“恢复透明人像”会重置整个蒙版。
+
