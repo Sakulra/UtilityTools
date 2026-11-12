@@ -1,0 +1,30 @@
+1.在 D:\PC_Log 目录下创建一个文本文件：shutdown_log.cmd
+写入以下内容：
+@echo off
+
+"D:\PC_Log\pc_power_log.exe" shutdown
+
+exit /b 0
+
+注意：这里使用 .cmd 包装 C++ 程序，是为了确保 Windows 7 的组策略能够正常调用 EXE
+2.按 Win + R打开本地组策略输入gpedit.msc
+进入：
+计算机配置
+  └─ Windows 设置
+      └─ 脚本（启动或关机）
+          └─ 关机
+
+3.双击右侧的“关机”
+点击“添加”，然后设置：
+脚本名称	D:\PC_Log\shutdown_log.cmd
+脚本参数	留空
+
+4.点击确定，应用设置
+
+检查 Windows 7 是否安装 SP1
+按 Win + R，输入winver
+显示：
+Windows 7
+版本 6.1
+Service Pack 1
+证明已安装sp1
